@@ -4,10 +4,21 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"golang.org/x/term"
 )
 
 const w = 40
 const h = 15
+
+type Movement int
+const (
+	Left Movement = iota
+	Right
+	Up
+	Down
+	No
+)
 
 type Cell struct {
 	Ch rune
@@ -15,12 +26,12 @@ type Cell struct {
 
 type Canvas [][]Cell
 
-func NewCanvas(width, height int) Canvas {
+func NewCanvas(width, height int) *Canvas {
 	c := make(Canvas, width)
 	for i := range len(c) {
 		c[i] = make([]Cell, height)
 	}
-	return c
+	return &c
 }
 
 func (c Canvas) FillCanvas() {
@@ -36,11 +47,14 @@ type Coord struct {
 	Y int
 }
 
+type Input byte
+
 type Snake struct {
 	Head Coord
 	Tail []Coord
 	HeadCh rune
 	TailCh rune
+	Direction Movement
 }
 
 func NewSnake(x, y int) *Snake {
@@ -56,7 +70,7 @@ func NewSnake(x, y int) *Snake {
 		},
 		HeadCh: 'H',
 		TailCh: 'T',
-
+		Direction: Right,
 	}
 }
 
@@ -72,25 +86,26 @@ func (s *Snake) UpdateSnake() {
 		s.Tail[i] = s.Tail[i-1]
 	}
 	s.Tail[0] = s.Head
-	s.Head.Y += 1
-	s.Head.X += 1
 
 }
 
 type World struct {
-	Canvas Canvas
+	Canvas *Canvas
 	Snake *Snake
+	Input Input
+	IsRunning bool
 }
 
 func NewWorld() *World {
 	c := NewCanvas(w, h)
 	c.FillCanvas()
 
-	s := NewSnake(1, 1)
+	s := NewSnake(5, 1)
 
 	return &World {
 		Canvas: c,
 		Snake: s,
+		IsRunning: true,
 	}
 }
 
@@ -100,14 +115,16 @@ func (w *World) Render() {
 
 	ClearScreen()
 
-	for i := range len(w.Canvas[0]) {
-		for j := range len(w.Canvas) {
+	c := *w.Canvas
+	for i := range len(c[0]) {
+		for j := range len(c) {
 
 
 			for k := range len(w.Snake.Tail) {
 				if w.Snake.Tail[k].X == j && w.Snake.Tail[k].Y  == i {
 					fmt.Printf("%c", w.Snake.TailCh)
 					isCanvas = false
+					break
 				}
 			}
 
@@ -117,17 +134,83 @@ func (w *World) Render() {
 			} 
 
 			if isCanvas{
-				fmt.Printf("%c", w.Canvas[j][i].Ch)
+				fmt.Printf("%c", c[j][i].Ch)
 			}
 			isCanvas = true
 		}
-		os.Stdout.Write([]byte("\n"))
+		os.Stdout.Write([]byte("\r\n"))
 	}
 	time.Sleep(time.Millisecond * 200)
 }
 
 func (w *World) Update() {
+
+
 	w.Snake.UpdateSnake()
+	w.Snake.UpdateDirection()
+}
+
+func (s *Snake) UpdateDirection() {
+
+	if s.Direction == Right {
+	  s.Head.X += 1
+	}
+	
+	if s.Direction == Left {
+	  s.Head.X -= 1
+	}
+
+	if s.Direction == Up {
+	  s.Head.Y -= 1
+	}
+
+	if s.Direction == Down {
+	  s.Head.Y += 1
+	}
+}
+
+func  RenderInfo() {
+}
+
+func ReadInput(out chan <- byte) {
+
+	buf := make([]byte, 1)
+	for {
+		_, err := os.Stdin.Read(buf)
+		if err != nil {
+			fmt.Printf("Failed to reading a key: %v\n", err)
+			return 
+		}
+		out <- buf[0]
+	}
+}
+
+func TickLoop(out chan <- struct{}) {
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		out <- struct{}{}
+	}
+}
+
+func (s *Snake) ReadMovement(input <- chan byte, tick <- chan struct{}) {
+	select {
+	case b := <- input:
+		switch b {
+		case 'i':
+			s.Direction = Up
+		case 'j':
+			s.Direction = Left
+		case 'k':
+			s.Direction = Down
+		case 'l':
+			s.Direction = Right
+		case 'q':
+			os.Exit(0)
+		}
+	case <- tick:
+	}
 }
 
 func ClearScreen() {
@@ -138,13 +221,37 @@ func HideCursor() {
 	os.Stdout.Write([]byte("\033[?25l"))
 }
 
+func RawMode() func() {
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		fmt.Printf("Failed to enable raw mode: %v\n", err)
+	}
+	return func() {
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+		if err != nil {
+			fmt.Printf("Failed to restore normal mode: %v\n", err)
+		}
+	}
+}
+
 func main() {
+	restore := RawMode()
+	defer restore()
 
 	HideCursor()
+	i := make(chan byte)
+	tick := make(chan struct{})
+
+	go ReadInput(i)
+	go TickLoop(tick)
 
 	world := NewWorld()
 
-	for {
+	for world.IsRunning {
+
+		println("ho")
+
+		world.Snake.ReadMovement(i, tick)
 		world.Render()
 		world.Update()
 	}
